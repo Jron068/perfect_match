@@ -879,6 +879,10 @@
       state[c.key] = { on: true, shade: Math.min(c.defShade, Math.max(list.length - 1, 0)) };
       c.sliders.forEach(s => state[c.key][s.prop] = s.def);
     });
+    state.eyeshadow.angle = 25;
+    state.eyeshadow.height = 100;
+    state.eyeshadow.width = 100;
+    state.eyeshadow.line = 35;
   }
   resetState();
 
@@ -960,7 +964,7 @@
             <div class="palette-category-icon"><i class="bi ${cat.icon}"></i></div>
             <div>
               <h3 style="font-size:1rem;font-weight:700;margin:0;color:var(--text-primary);">${cat.title}</h3>
-              <p style="font-size:0.78rem;color:var(--text-muted);margin:0;">Swipe to browse shades</p>
+              <p style="font-size:0.78rem;color:var(--text-muted);margin:0;">${cat.key === 'foundation' ? 'Covers the full detected face, keeping eyes and lips clear.' : 'Swipe to browse shades'}</p>
             </div>
           </div>
           <label class="pm-toggle" title="Show / hide ${cat.title}">
@@ -993,6 +997,27 @@
                    min="0" max="100" value="${st[s.prop]}" data-cat="${cat.key}" data-prop="${s.prop}">
             <output id="out-${cat.key}-${s.prop}">${st[s.prop]}%</output>
           </div>`).join('')}
+        ${cat.key === 'eyeshadow' ? `
+          <div class="range-row">
+            <label for="eyeshadowAngle">Angle</label>
+            <input type="range" class="pm-range" id="eyeshadowAngle" min="-45" max="45" value="${st.angle}" data-eyeshadow-shape="angle">
+            <output id="out-eyeshadow-angle">${st.angle}°</output>
+          </div>
+          <div class="range-row">
+            <label for="eyeshadowHeight">Height</label>
+            <input type="range" class="pm-range" id="eyeshadowHeight" min="50" max="160" value="${st.height}" data-eyeshadow-shape="height">
+            <output id="out-eyeshadow-height">${st.height}%</output>
+          </div>
+          <div class="range-row">
+            <label for="eyeshadowWidth">Sides</label>
+            <input type="range" class="pm-range" id="eyeshadowWidth" min="50" max="160" value="${st.width}" data-eyeshadow-shape="width">
+            <output id="out-eyeshadow-width">${st.width}%</output>
+          </div>
+          <div class="range-row">
+            <label for="eyeshadowLine">Wing line</label>
+            <input type="range" class="pm-range" id="eyeshadowLine" min="0" max="100" value="${st.line}" data-eyeshadow-shape="line">
+            <output id="out-eyeshadow-line">${st.line}%</output>
+          </div>` : ''}
 
         <div style="border-top:1px solid var(--border-light);margin-top:0.8rem;padding-top:0.7rem;">
           <label for="custom-name-${cat.key}" style="font-size:0.75rem;font-weight:600;">Create your own color</label>
@@ -1076,6 +1101,19 @@
       });
     });
 
+    host.querySelectorAll('[data-eyeshadow-shape]').forEach(input => {
+      input.addEventListener('input', () => {
+        const prop = input.dataset.eyeshadowShape;
+        state.eyeshadow[prop] = Number(input.value);
+        const suffix = prop === 'angle' ? '°' : '%';
+        document.getElementById(`out-eyeshadow-${prop}`).textContent = input.value + suffix;
+        setFill(input);
+        state.eyeshadow.on = true;
+        syncToggle('eyeshadow');
+        requestRender();
+      });
+    });
+
     // on/off switch
     host.querySelectorAll('[data-toggle]').forEach(t => {
       t.addEventListener('change', () => {
@@ -1111,9 +1149,7 @@
     eyeR:      [33,246,161,160,159,158,157,173,133,155,154,153,145,144,163,7],
     eyeL:      [362,398,384,385,386,387,388,466,263,249,390,373,374,380,381,382],
     lidR:      [33,246,161,160,159,158,157,173,133],
-    lidL:      [263,466,388,387,386,385,384,398,362],
-    browR:     [70,63,105,66,107,55,65,52,53,46],
-    browL:     [300,293,334,296,336,285,295,282,283,276]
+    lidL:      [263,466,388,387,386,385,384,398,362]
   };
 
   let photo = null, W = 0, H = 0, shapes = null;
@@ -1121,6 +1157,8 @@
   const ctx = canvas.getContext('2d');
   const layer = document.createElement('canvas');
   const lctx = layer.getContext('2d');
+  const softLayer = document.createElement('canvas');
+  const softCtx = softLayer.getContext('2d');
   const canBlur = 'filter' in ctx;
 
   function ellipsePoly(cx, cy, rx, ry, n = 36) {
@@ -1152,10 +1190,14 @@
     return {
       faceW,
       face: poly(LM.faceOval),
-      cuts: [poly(LM.eyeR), poly(LM.eyeL), poly(LM.lipsOuter), poly(LM.browR), poly(LM.browL)],
+      cuts: [poly(LM.eyeR), poly(LM.eyeL), poly(LM.lipsOuter)],
       lipsOuter: poly(LM.lipsOuter),
       lipsInner: poly(LM.lipsInner),
       shadows: [lidPoly(poly(LM.lidR)), lidPoly(poly(LM.lidL))],
+      eyeCenters: [
+        { x: (P(33).x + P(133).x) / 2, y: (P(33).y + P(133).y) / 2 },
+        { x: (P(362).x + P(263).x) / 2, y: (P(362).y + P(263).y) / 2 }
+      ],
       cheeks: [lerp(P(205), P(234), 0.2), lerp(P(425), P(454), 0.2)],
       underEyes: [
         { x: (P(33).x + P(133).x) / 2, y: (P(33).y + P(133).y) / 2 + faceW * 0.06 },
@@ -1187,6 +1229,7 @@
       lipsOuter: ellipsePoly(lipC.x, lipC.y, fw * 0.13, fw * 0.045),
       lipsInner: ellipsePoly(lipC.x, lipC.y, fw * 0.1, fw * 0.008),
       shadows: [lidPoly(lidFor(eyeR, 1)), lidPoly(lidFor(eyeL, -1).reverse())],
+      eyeCenters: [eyeR, eyeL],
       cheeks: [{ x: cx - fw * 0.27, y: cy + fh * 0.08 }, { x: cx + fw * 0.27, y: cy + fh * 0.08 }],
       underEyes: [{ x: eyeR.x, y: eyeR.y + fw * 0.07 }, { x: eyeL.x, y: eyeL.y + fw * 0.07 }]
     };
@@ -1214,6 +1257,41 @@
     c.closePath();
   }
 
+  function shapeShadow(points, center, angle, height, width, faceW) {
+    const outer = center.x < W / 2 ? -1 : 1;
+    const radians = angle * Math.PI / 180;
+    const cos = Math.cos(radians), sin = Math.sin(radians);
+    const scaled = points.map(point => {
+      const outward = (point.x - center.x) * outer;
+      const upward = center.y - point.y;
+      const rotatedOutward = outward * cos - upward * sin;
+      const rotatedUpward = outward * sin + upward * cos;
+      return {
+        x: center.x + outer * rotatedOutward * width / 100,
+        y: center.y - rotatedUpward * height / 100
+      };
+    });
+    const tipIndex = scaled.reduce((best, point, i, all) =>
+      (point.x - center.x) * outer > (all[best].x - center.x) * outer ? i : best, 0);
+    return { points: scaled, tip: scaled[tipIndex], outer };
+  }
+
+  function drawShadowWing(c, shape, length, faceW, angle) {
+    if (length <= 0) return;
+    const radians = angle * Math.PI / 180;
+    const direction = { x: shape.outer * Math.cos(radians), y: -Math.sin(radians) };
+    const normal = { x: Math.sin(radians), y: shape.outer * Math.cos(radians) };
+    const halfWidth = faceW * 0.012;
+    const wingLength = faceW * 0.1 * length / 100;
+    const base = shape.tip;
+    c.beginPath();
+    c.moveTo(base.x + normal.x * halfWidth, base.y + normal.y * halfWidth);
+    c.lineTo(base.x + direction.x * wingLength, base.y + direction.y * wingLength);
+    c.lineTo(base.x - normal.x * halfWidth, base.y - normal.y * halfWidth);
+    c.closePath();
+    c.fill();
+  }
+
   // draw something on the temp layer, then blend it onto the photo
   function paint(drawFn, cutFn, passes, blurPx) {
     lctx.clearRect(0, 0, W, H);
@@ -1224,13 +1302,25 @@
       cutFn(lctx);
       lctx.globalCompositeOperation = 'source-over';
     }
+    let paintLayer = layer;
+    if (canBlur && blurPx > 0) {
+      softCtx.clearRect(0, 0, W, H);
+      softCtx.save();
+      softCtx.filter = `blur(${blurPx}px)`;
+      softCtx.drawImage(layer, 0, 0);
+      softCtx.restore();
+      // Keep the softened color inside its original makeup mask.
+      softCtx.globalCompositeOperation = 'destination-in';
+      softCtx.drawImage(layer, 0, 0);
+      softCtx.globalCompositeOperation = 'source-over';
+      paintLayer = softLayer;
+    }
     passes.forEach(p => {
       if (p.alpha <= 0.001) return;
       ctx.save();
       ctx.globalAlpha = Math.min(p.alpha, 1);
       ctx.globalCompositeOperation = p.blend;
-      if (canBlur) ctx.filter = `blur(${blurPx}px)`;
-      ctx.drawImage(layer, 0, 0);
+      ctx.drawImage(paintLayer, 0, 0);
       ctx.restore();
     });
   }
@@ -1298,11 +1388,21 @@
       const r = fw * 0.15 * (0.6 + (s.size / 100) * 0.9);
       paint(c => {
         shapes.cheeks.forEach(p => {
-          const g = c.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
-          g.addColorStop(0, col); g.addColorStop(0.45, col); g.addColorStop(1, 'rgba(0,0,0,0)');
-          c.fillStyle = g; c.beginPath(); c.arc(p.x, p.y, r, 0, Math.PI * 2); c.fill();
+          c.save();
+          c.translate(p.x, p.y);
+          c.scale(1.25, 0.8);
+          const g = c.createRadialGradient(0, 0, 0, 0, 0, r);
+          g.addColorStop(0, col);
+          g.addColorStop(0.35, col);
+          g.addColorStop(0.72, `${col}55`);
+          g.addColorStop(1, 'rgba(0,0,0,0)');
+          c.fillStyle = g;
+          c.beginPath();
+          c.arc(0, 0, r, 0, Math.PI * 2);
+          c.fill();
+          c.restore();
         });
-      }, null, [{ blend: 'multiply', alpha: a * 0.55 }, { blend: 'color', alpha: a * 0.6 }], fw * 0.01);
+      }, null, [{ blend: 'soft-light', alpha: a * 0.8 }, { blend: 'color', alpha: a * 0.4 }], fw * 0.01);
     }
 
     // Lips
@@ -1319,7 +1419,16 @@
     s = state.eyeshadow;
     if (s.on && s.amount > 0) {
       const a = s.amount / 100, col = pickColor('eyeshadow');
-      paint(c => { c.fillStyle = col; shapes.shadows.forEach(p => { c.beginPath(); pathPoly(c, p); c.fill(); }); },
+      paint(c => {
+        c.fillStyle = col;
+        shapes.shadows.forEach((p, i) => {
+          const shadow = shapeShadow(p, shapes.eyeCenters[i], s.angle, s.height, s.width, fw);
+          c.beginPath();
+          pathPoly(c, shadow.points);
+          c.fill();
+          drawShadowWing(c, shadow, s.line, fw, s.angle);
+        });
+      },
             null, [{ blend: 'multiply', alpha: a * 0.65 }, { blend: 'color', alpha: a * 0.5 }],
             fw * 0.012);
     }
@@ -1351,7 +1460,9 @@
       const scale = Math.min(1, 1000 / Math.max(img.naturalWidth, img.naturalHeight));
       W = Math.round(img.naturalWidth * scale);
       H = Math.round(img.naturalHeight * scale);
-      canvas.width = W; canvas.height = H; layer.width = W; layer.height = H;
+      canvas.width = W; canvas.height = H;
+      layer.width = W; layer.height = H;
+      softLayer.width = W; softLayer.height = H;
       canvas.style.display = 'block';
       document.getElementById('studioEmpty').style.display = 'none';
 
